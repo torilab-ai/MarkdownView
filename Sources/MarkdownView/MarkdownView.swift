@@ -1,102 +1,52 @@
 import SwiftUI
 import Markdown
-import Combine
 
-/// A view to render markdown text.
+/// A view that displays read-only Markdown content.
 public struct MarkdownView: View {
-    @Binding private var text: String
-
+    private var content: MarkdownContent
+    
     @State private var viewSize = CGSize.zero
-    @State private var scrollViewRef = ScrollProxyRef.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
     
-    @Environment(\.lineSpacing) private var lineSpacing
-    @Environment(\.markdownFont) private var fontProvider
-    @Environment(\.markdownViewRole) private var role
-    @Environment(\.codeHighlighterTheme) private var codeHighlighterTheme
-    @Environment(\.inlineCodeBlockTint) private var inlineTintColor
-    @Environment(\.blockQuoteTint) private var blockQuoteTintColor
+    @Environment(\.markdownViewStyle) private var markdownViewStyle
+    @Environment(\.markdownFontGroup.body) private var bodyFont
+    @Environment(\.markdownRendererConfiguration) private var configuration
     
-    // Update content 0.3s after the user stops entering.
-    @StateObject private var contentUpdater = ContentUpdater()
-    @State private var representedView = AnyView(Color.black.opacity(0.001)) // RenderedView
-    
-    /// Parse the Markdown and render it as a single `View`.
-    /// - Parameters:
-    ///   - text: A Binding Text that can be modified.
-    ///   - baseURL: A path where the images will load from.
-    public init(text: Binding<String>, baseURL: URL? = nil) {
-        _text = text
-        if let baseURL {
-            ImageRenderer.shared.baseURL = baseURL
-        }
+    public init(_ text: String) {
+        self.content = MarkdownContent(
+            raw: .plainText(text)
+        )
     }
     
-    /// Parse the Markdown and render it as a single view.
-    /// - Parameters:
-    ///   - text: Markdown Text.
-    ///   - baseURL: A path where the images will load from.
-    public init(text: String, baseURL: URL? = nil) {
-        _text = .constant(text)
-        if let baseURL {
-            ImageRenderer.shared.baseURL = baseURL
-        }
+    @_spi(WIP)
+    public init(_ url: URL) {
+        self.content = MarkdownContent(
+            raw: .url(url)
+        )
+    }
+    
+    public init(_ content: MarkdownContent) {
+        self.content = content
     }
     
     public var body: some View {
-        ScrollViewReader { scrollProxy in
-            ZStack {
-                switch configuration.role {
-                case .normal: representedView
-                case .editor:
-                    representedView
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                }
-            }
-            .onAppear { scrollViewRef.proxy = scrollProxy }
-        }
-        .sizeOfView($viewSize)
-        .containerSize(viewSize)
-        // Set default font.
-        .font(fontProvider.body)
-        // Push current text, waiting for next update.
-        .onChange(of: text, perform: contentUpdater.push(_:))
-        // Load view immediately after the first launch.
-        // Receive configuration changes and reload MarkdownView to fit.
-        .task(id: configuration) { makeView(text: text) }
-        // Received a debouncedText, we need to reload MarkdownView.
-        .onReceive(contentUpdater.textUpdater, perform: makeView(text:))
+        markdownViewStyle
+            .makeBody(
+                configuration: MarkdownViewStyleConfiguration(body: _renderedBody)
+            )
+            .erasedToAnyView()
+            .font(bodyFont)
     }
     
-    private func makeView(text: String) {
-        func view() -> AnyView {
-            var renderer = Renderer(
-                text: text,
-                configuration: configuration,
-                interactiveEditHandler: { text in
-                    Task { @MainActor in
-                        self.text = text
-                        self.makeView(text: text)
-                    }
-                }
-            )
-            let parseBD = !BlockDirectiveRenderer.shared.blockDirectiveProviders.isEmpty
-            return renderer.representedView(parseBlockDirectives: parseBD)
+    @ViewBuilder
+    private var _renderedBody: some View {
+        if configuration.math.shouldRender {
+            MathFirstMarkdownViewRenderer()
+                .makeBody(content: content, configuration: configuration)
+        } else {
+            CmarkFirstMarkdownViewRenderer()
+                .makeBody(content: content, configuration: configuration)
         }
-        
-        representedView = view()
-        MarkdownTextStorage.default.text = text
-    }
-}
-
-extension MarkdownView {
-    var configuration: RendererConfiguration {
-        RendererConfiguration(
-            role: role,
-            lineSpacing: lineSpacing,
-            inlineCodeTintColor: inlineTintColor,
-            blockQuoteTintColor: blockQuoteTintColor,
-            fontProvider: fontProvider,
-            codeBlockTheme: codeHighlighterTheme
-        )
     }
 }
